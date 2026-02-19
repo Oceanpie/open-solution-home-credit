@@ -114,3 +114,53 @@ ENV/
 
 # Working directories
 examples/cache/
+
+# ============================================================
+# 数据科学项目补充 (2026)
+# ============================================================
+
+# === 数据文件 ===
+data/raw/
+data/processed/
+data/external/
+*.csv.gz
+*.parquet
+*.h5
+*.hdf5
+
+# === 模型文件 ===
+models/
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.onnx
+*.bin
+
+# === 输出和日志 ===
+outputs/
+logs/
+reports/figures/
+
+# === ML 实验追踪 ===
+mlruns/
+mlartifacts/
+.neptune/
+
+# === uv 缓存 ===
+.uv/
+
+# === 现代编辑器 ===
+.vscode/
+*.code-workspace
+.fleet/
+
+# === 系统文件 ===
+.DS_Store
+Thumbs.db
+
+# === 敏感信息 ===
+.env.local
+.env.*.local
+secrets.yaml
+credentials.json
