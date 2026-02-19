@@ -1,4 +1,4 @@
-# PR-1 现代化改造方案（避免过度设计）
+# PR-1 现代化改造方案
 
 ## 0) 本文采用的技术文档编写规则
 
@@ -10,7 +10,7 @@
 2. 语言直接简洁：短句、主动语态、明确动词。
 3. 术语一致：一个概念只使用一个术语（`tracker`、`run`、`metric`、`artifact`）。
 4. 操作可扫读：使用编号步骤、明确文件路径、明确输出结果。
-5. 避免歧义：明确“做什么”和“不做什么”。
+5. 避免歧义：明确"做什么"和"不做什么"。
 6. 可读性优先：避免口语化和文化特定表达。
 7. 文档与改造同步：本文可直接作为 PR 实施清单。
 
@@ -24,139 +24,221 @@
 
 ## 1) PR-1 目标
 
-在不改变现有 pipeline 设计和 CLI 使用方式的前提下，将实验追踪从 Neptune 替换为可插拔追踪层，并默认接入 W&B。
+将 2018 年项目升级到 Python 3.12 可运行状态：
+
+1. **流水线迁移**：steppy → Hamilton（steppy 不支持 Python 3.12）
+2. **移除废弃依赖**：steppy、steppy-toolkit、attrdict、nose
+3. **依赖升级**：pandas、numpy、scikit-learn、lightgbm、xgboost、catboost 等
+4. **追踪层改造**：Neptune → W&B
+5. 保持现有 CLI 和业务逻辑不变
 
 ## 2) 范围
 
-本 PR 包含：
-1. 新增 tracker 抽象与 W&B 实现。
-2. 现有指标上报统一走 tracker。
-3. 新增 tracking 配置项。
-4. 保持命令行为不变。
-5. 更新 W&B 所需依赖与文档。
+### 2.1 阻塞性依赖替换（必须完成）
 
-本 PR 不包含：
-1. `steppy` 迁移到 Hamilton。
-2. Keras 迁移到 PyTorch。
-3. OOF/stacking 算法逻辑变更。
-4. 调参框架重构。
+| 依赖 | 问题 | 替换方案 | 复杂度 |
+|------|------|---------|--------|
+| **steppy** | 不支持 Python 3.12（仅 3.5-3.7） | Hamilton | 🔴 高 |
+| **steppy-toolkit** | 依赖 steppy，已归档 | 自实现 transformers | 🔴 高 |
+| **attrdict** | 2019 年归档 | pydantic | 🟡 中 |
+| **sklearn.externals.joblib** | sklearn 1.0+ 移除 | 独立 joblib 包 | 🟢 低 |
+| **hyperopt** | 不活跃 | Optuna | 🟡 中 |
+| **nose** | 已废弃 | pytest（如需测试） | 🟢 低 |
 
-## 3) 文件级改造清单
+### 2.2 依赖升级
 
-### 3.1 新增文件
+| 依赖 | 当前版本 | 目标版本 | API 变更风险 |
+|------|---------|---------|-------------|
+| pandas | 0.23.1 | 2.2.x | 中（部分 API 废弃） |
+| numpy | 1.22.0 | 2.x | 低 |
+| scikit-learn | 0.19.1 | 1.6.x | 中 |
+| lightgbm | 2.1.1 | 4.x | 中 |
+| xgboost | 0.72.1 | 2.x | 中 |
+| catboost | 0.9.1.1 | 1.2.x | 低 |
+| category_encoders | 1.2.6 | 2.8.x | 低 |
+| click | 6.7 | 8.x | 低 |
+| pyyaml | >=4.2b1 | 6.x | 低 |
 
-1. `src/tracking/base.py`
-- 定义 `Tracker` 接口：
-  - `init_run(run_name: str, config: dict, tags: list[str] | None = None)`
-  - `log_param(key: str, value)`
-  - `log_params(params: dict)`
-  - `log_metric(name: str, value, step: int | None = None)`
-  - `log_metrics(metrics: dict, step: int | None = None)`
-  - `log_artifact(path: str, name: str | None = None)`
-  - `finish()`
+### 2.3 新增依赖
 
-2. `src/tracking/wandb_tracker.py`
-- 使用 `wandb` 实现 `Tracker`：
-  - `wandb.init(...)`
-  - `wandb.config.update(...)`
-  - `wandb.log(...)`
-  - `wandb.log_artifact(...)`
-  - `wandb.finish()`
+| 依赖 | 版本 | 用途 |
+|------|------|------|
+| sf-hamilton | 1.x | 流水线框架（替代 steppy） |
+| wandb | 0.19.x | 实验追踪（替代 neptune） |
+| pydantic | 2.x | 配置管理（替代 attrdict） |
+| joblib | 1.4.x | 模型持久化（从 sklearn 分离） |
+| optuna | 4.x | 超参调优（替代 hyperopt） |
+| ruff | 0.9.x | 代码检查 |
 
-3. `src/tracking/noop_tracker.py`
-- 空实现，用于本地离线/CI 禁用上报场景。
+### 2.4 移除的依赖
 
-4. `src/tracking/factory.py`
-- 按配置创建 tracker：
-  - backend: `wandb` 或 `noop`
-  - mode: `online`、`offline`、`disabled`
+| 依赖 | 移除原因 |
+|------|---------|
+| steppy | 不支持 Python 3.12 |
+| steppy-toolkit | 依赖 steppy |
+| attrdict | 2019 年归档 |
+| neptune-cli | 替换为 wandb |
+| hyperopt | 不活跃，替换为 optuna |
+| nose | 已废弃 |
 
-### 3.2 修改文件
+### 2.5 不包含
 
-1. `src/pipeline_config.py`
-- 在配置对象中新增 tracking 区块：
-  - `tracking.backend`
-  - `tracking.project`
-  - `tracking.entity`
-  - `tracking.mode`
-  - `tracking.tags`
+- Keras → PyTorch 迁移
+- OOF/stacking 算法逻辑变更
+- notebook 重写
 
-2. `src/utils.py`
-- `read_params(ctx, fallback_file)` 当前依赖 Neptune 的 `OfflineContextParams` 判断离线/在线模式。
-- 改为直接从 YAML 文件加载配置，不再依赖 Neptune Context。
-- 移除 `from deepsense import neptune` 相关引用。
+## 3) steppy → Hamilton 迁移
 
-3. `src/pipeline_manager.py`
-- 将直接 Neptune 上报（`ctx.channel_send`）替换为 tracker 调用。
-- 指标名称保持不变（保证实验可比性）。
+### 3.1 概念映射
 
-4. `src/callbacks.py`
-- 将 Neptune 专用 callback 改为 tracker 版 callback。
-- 保持原有上报语义：
-  - 每个 epoch 的训练损失
-  - 每个 epoch 的验证损失
+| steppy | Hamilton |
+|--------|----------|
+| `Step` | 函数（参数名定义依赖） |
+| `BaseTransformer` | 纯函数 |
+| `Adapter` + `E()` | 函数参数（自动推断） |
+| `persist_output=True` | `@materialize` 装饰器 |
+| `cache_output=True` | `@cache` 装饰器 |
+| `input_steps` | 函数参数名 |
 
-5. `src/models.py`
-- 将 Neptune callback 创建逻辑替换为 tracker callback 工厂。
-- 模型训练/预测逻辑不变。
+### 3.2 代码迁移示例
 
-6. `main.py`
-- 每个命令执行周期接入 tracker 生命周期：
-  - 命令开始时 init
-  - 命令结束（或 finally）时 finish
+**steppy 方式（旧）：**
+```python
+from steppy.base import Step
+from steppy.adapter import Adapter, E
 
-7. `configs/neptune.yaml`
-8. `configs/neptune_stacking.yaml`
-9. `configs/neptune_selected_features_v1.yaml`
-- 新增配置键：
-  - `tracking__backend: wandb`
-  - `tracking__project: <project-name>`
-  - `tracking__entity: <entity-or-empty>`
-  - `tracking__mode: offline`
-  - `tracking__tags: []`
+features = Step(
+    name='features',
+    transformer=FeatureExtractor(),
+    input_data=['main_table'],
+    adapter=Adapter({'X': E('main_table', 'data')})
+)
 
-10. `requirements.txt`
-- 新增 `wandb`。
-- PR-1 暂时保留 `neptune-cli`，降低回滚风险。
+model = Step(
+    name='light_gbm',
+    transformer=LightGBM(),
+    input_steps=[features],
+    adapter=Adapter({'X': E(features.name, 'features')})
+)
+```
 
-11. `README.md`
-- 增加 W&B 快速开始：
-  - `pip install -r requirements.txt`
-  - `wandb login`
-  - 运行原有命令
-- 明确 Neptune 路径为 legacy/deprecated。
+**Hamilton 方式（新）：**
+```python
+# features.py
+import pandas as pd
 
-## 4) PR-1 内部实施顺序
+def features(main_table: dict) -> pd.DataFrame:
+    """特征提取"""
+    return FeatureExtractor().transform(main_table['data'])
 
-1. 新增 `src/tracking/*`。
-2. 接入配置项。
-3. 替换上报调用点（`pipeline_manager`、`callbacks`、`models`）。
-4. 在 `main.py` 接入 run 生命周期。
-5. 更新配置文件和依赖。
-6. 更新 README。
+def light_gbm(features: pd.DataFrame, config: dict) -> object:
+    """模型训练"""
+    return LightGBM(**config).fit(features)
+```
 
-## 5) 验收标准
+### 3.3 steppy-toolkit 替换
 
-1. `train_evaluate_cv` 验收需覆盖两条路径（`--model_level` 默认值为 `first`）：
-  - `python main.py -- train_evaluate_cv --pipeline_name lightGBM --model_level first -d`
-  - `python main.py -- train_evaluate_cv --pipeline_name lightGBM --model_level second -d`
-2. 当 `tracking__mode=online` 时，可在 W&B 看见指标。
-3. 当 `tracking__mode=disabled` 时，本地可离线运行（不依赖外网）。
-4. 现有命令名与主要参数不变。
-5. 除日志后端替换外，模型行为不发生变化。
+需要自实现的类：
 
-## 6) 风险控制
+| steppy-toolkit | 新实现位置 |
+|----------------|-----------|
+| `toolkit.keras_transformers.models.ClassifierXY` | `src/models.py:NeuralNetwork`（已有，需重构） |
+| `toolkit.sklearn_transformers.models.SklearnClassifier` | `src/models.py:get_sklearn_classifier`（已有，需重构） |
 
-1. Neptune 依赖仅保留一个 PR 过渡（用于回滚兜底）。
-2. PR-1 不重命名任何指标键。
-3. PR-1 不改数据切分/CV/OOF 逻辑。
-4. 增加最小 smoke test：
-  - 初始化 tracker
-  - 记录一个 metric
-  - 正常 finish
+## 4) 文件级改造清单
 
-## 7) PR-2 预告（不在本 PR）
+### 4.1 新增文件
 
-1. 删除 Neptune 相关依赖与废弃代码路径。
-2. 启动 `steppy` 到 Hamilton 迁移。
-3. 启动 Keras 到 PyTorch Lightning 迁移。
+1. **`src/tracking/` 目录**
+   - `base.py`：Tracker 抽象接口
+   - `wandb_tracker.py`：W&B 实现
+   - `noop_tracker.py`：空实现
+   - `factory.py`：工厂函数
+
+2. **`src/pipeline/` 目录**（Hamilton 管道）
+   - `__init__.py`
+   - `features.py`：特征工程函数
+   - `models.py`：模型训练函数
+   - `preprocessing.py`：预处理函数
+   - `config.py`：管道配置
+
+3. **`requirements-legacy.txt`**
+   - 存档 2018 年原始依赖版本
+
+### 4.2 重构文件
+
+| 文件 | 变更内容 |
+|------|---------|
+| `src/pipeline_blocks.py` | steppy Step → Hamilton 函数 |
+| `src/pipelines.py` | 使用 Hamilton Driver 执行 |
+| `src/models.py` | 移除 steppy BaseTransformer，移除 toolkit 导入 |
+| `src/utils.py` | 移除 attrdict，修复 joblib 导入 |
+| `src/pipeline_config.py` | 移除 Neptune Context，使用 pydantic 配置类 |
+| `src/callbacks.py` | Neptune → tracker |
+
+### 4.3 配置文件
+
+| 文件 | 变更 |
+|------|------|
+| `configs/*.yaml` | 新增 tracking 配置键 |
+| `pyproject.toml` | 填充 dependencies |
+| `ruff.toml` | 新增代码检查配置 |
+
+## 5) 实施顺序
+
+### 阶段一：依赖准备
+1. 创建 `requirements-legacy.txt` 存档
+2. 更新 `pyproject.toml` 依赖
+3. 替换 `attrdict` → `pydantic`（定义配置类）
+4. 替换 `hyperopt` → `optuna`（如项目使用）
+5. 修复 `sklearn.externals.joblib` → `joblib`
+
+### 阶段二：Hamilton 迁移（核心）
+1. 创建 `src/pipeline/` 目录结构
+2. 将 `pipeline_blocks.py` 中的 Step 转换为函数
+3. 将 `BaseTransformer` 子类转换为纯函数
+4. 自实现 `ClassifierXY` 和 `SklearnClassifier`
+5. 更新 `pipelines.py` 使用 Hamilton Driver
+
+### 阶段三：追踪层改造
+1. 新增 `src/tracking/*`
+2. 替换 Neptune 调用
+3. 接入 W&B
+
+### 阶段四：验收与文档
+1. 验证核心命令可运行
+2. 更新 README
+3. 添加 ruff 配置
+
+## 6) 验收标准
+
+1. **Python 3.12 可运行**：
+   ```bash
+   uv sync
+   python main.py -- train_evaluate_cv --pipeline_name lightGBM -d
+   ```
+
+2. **W&B 追踪正常**：
+   - `tracking__mode=online` 时可在 W&B 看见指标
+   - `tracking__mode=disabled` 时可离线运行
+
+3. **代码质量**：
+   - `ruff check .` 通过
+
+4. **行为一致**：
+   - 命令行参数不变
+   - 模型输出格式不变
+
+## 7) 风险控制
+
+| 风险 | 缓解措施 |
+|------|---------|
+| Hamilton 学习曲线 | 先实现简单管道，逐步迁移 |
+| API 变更导致行为差异 | 保留 `requirements-legacy.txt` 可回滚 |
+| 神经网络 Keras 版本 | 保持 Keras 依赖，仅重构管道层 |
+
+## 8) PR-2 预告（不在本 PR）
+
+1. 删除 `src/legacy/` 归档代码
+2. Keras → PyTorch 迁移（可选）
+3. notebook 重构
